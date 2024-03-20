@@ -1,0 +1,145 @@
+; MIT License
+;
+; Copyright (c) 2024 Mikael Sundin
+;
+; Permission is hereby granted, free of charge, to any person obtaining a copy
+; of this software and associated documentation files (the "Software"), to deal
+; in the Software without restriction, including without limitation the rights
+; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+; copies of the Software, and to permit persons to whom the Software is
+; furnished to do so, subject to the following conditions:
+;
+; The above copyright notice and this permission notice shall be included in all
+; copies or substantial portions of the Software.
+;
+; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+; SOFTWARE.
+
+;----------------------------------------------------------------------------------------------------
+; This piece of software is to receive NMRA DCC packet by using RP2040 PIO block. 
+; Whole packet will be added to RX-FIFO and packet length can be read by 
+; reading RX-FIFO count. 
+;
+; An interrupt will be raised when data is received, this is same IRQ number as
+; the state machine index.
+;
+; Example of usage on PIO0.
+; #include "dcc_decoder.pio.h"
+; 
+; void load_progam(void){
+;     uint statemachine = 0;
+;     uint rxpin = 19;
+;
+;     uint offset = pio_add_program(pio0, &dcc_receiver_program);
+;     dcc_decoder_init(pio0, statemachine, rxpin, offset);  
+; }
+;
+;
+;
+;----------------------------------------------------------------------------------------------------
+
+.program dcc_receiver
+
+.define PUBLIC debug_pin    21 
+.define MINIMUM_PREAMBLES   12
+
+;Debug purpose, to measure where sampling occur.
+;.side_set 1
+
+.wrap_target
+
+;----------------------------------------------------------------------------------------------------
+; Preamble state machine
+preamble_begin:
+    set X, MINIMUM_PREAMBLES        ;side 0  ; X=MINIMUM_PREAMBLES
+
+preamble_loop:
+    ;X-- if X > 0
+    jmp !X, preamble_task           ;side 0  ; jump X == 0 
+    jmp X--, preamble_task          ;side 0  ; jump X > 0
+
+preamble_task:
+    ;wait for rising edge
+    wait 0 pin 0 [0]                ;side 0  ; Wait for high signal + delay (14+1+1)*5us = 80us
+    wait 0 pin 1 [14]               ;side 0  ; ^
+    
+    ;jump based on pin level,
+    jmp pin, preamble_check         ;side 1  ;DCC zero received, check preamble
+    jmp preamble_loop               ;side 0  ;DCC one received
+
+    ;check if number of preamble bits is received
+preamble_check:
+    jmp !X, data_begin              ;side 0  ;jump data_begin if X==0
+    jmp preamble_begin              ;side 0  ;else jump preamble_begin, not enough preamble bits
+;----------------------------------------------------------------------------------------------------
+
+
+;----------------------------------------------------------------------------------------------------
+; Receive data
+data_begin:
+    set X, 7                        ;side 0
+
+data_rx:
+    ;wait for data bit
+    wait 0 pin 0 [0]                ;side 0  ; Wait for rising edge + delay (14+1+1)*5us = 80us
+    wait 0 pin 1 [14]               ;side 0  ; ^
+
+    in pins, 1                      ;side 1  ;fetch DCC pin
+
+    jmp X--, data_rx                ;side 0  ;jmp X>0
+
+data_push:
+    ;inverted data and push to RX-FIFO 
+    mov isr, !isr                   ;side 0 
+    push noblock                    ;side 0 
+
+wait_stopbit:
+    ;wait for packet end bit    
+    wait 0 pin 0 [0]                ;side 1
+    wait 0 pin 1 [14]               ;side 0  ; Wait for high signal + delay (14+1+1)*5us = 80us
+
+    jmp pin, data_begin             ;side 1  ; DCC ZERO received, more data to receive
+;----------------------------------------------------------------------------------------------------
+
+;----------------------------------------------------------------------------------------------------
+; Tell system that we have a new DCC packet, and wait for IRQ to clear.
+    irq wait 0 rel                  ;side 1  ; Raise IRQ[SM_CHANNEL] and wait for the flag to be cleared.
+
+;----------------------------------------------------------------------------------------------------
+    .wrap                                   ; Go back to beginning
+
+
+;----------------------------------------------------------------------------------------------------
+; C code generator
+;
+
+% c-sdk {
+static inline void dcc_receiver_init(PIO pio, uint sm, uint dcc_pin, uint offset) {
+    pio_sm_config c = dcc_receiver_program_get_default_config(offset);
+
+    //Required for debugging via side set pins
+    //pio_gpio_init(pio, dcc_receiver_debug_pin);               //configure pin
+    //sm_config_set_sideset_pins(&c, dcc_receiver_debug_pin);   //side set first pin
+    //sm_config_set_out_pins(&c, dcc_receiver_debug_pin, 1);    //out instruction first pin
+    //pio_sm_set_consecutive_pindirs(pio, sm, dcc_receiver_debug_pin, 1, true);
+    
+    sm_config_set_in_pins(&c, dcc_pin);                         //in instruction first pin
+    sm_config_set_jmp_pin(&c, dcc_pin);                         //jmp instruction read pin
+
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);              // RX-FIFO 8x32 long. DCC is max 6byte long.
+    sm_config_set_clkdiv(&c, 625);                              // 125Mh/625.0 = 5us / tick
+    sm_config_set_in_shift(&c, false, false, 8);                // in shift must be configured for IN command to work.
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
+
+;----------------------------------------------------------------------------------------------------
+
+
