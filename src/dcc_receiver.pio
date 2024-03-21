@@ -66,7 +66,7 @@ preamble_loop:
 preamble_task:
     ;wait for rising edge
     wait 0 pin 0 [0]                ;side 0  ; Wait for high signal + delay (14+1+1)*5us = 80us
-    wait 0 pin 1 [14]               ;side 0  ; ^
+    wait 1 pin 0 [14]               ;side 0  ; ^
     
     ;jump based on pin level,
     jmp pin, preamble_check         ;side 1  ;DCC zero received, check preamble
@@ -87,7 +87,7 @@ data_begin:
 data_rx:
     ;wait for data bit
     wait 0 pin 0 [0]                ;side 0  ; Wait for rising edge + delay (14+1+1)*5us = 80us
-    wait 0 pin 1 [14]               ;side 0  ; ^
+    wait 1 pin 0 [14]               ;side 0  ; ^
 
     in pins, 1                      ;side 1  ;fetch DCC pin
 
@@ -101,7 +101,7 @@ data_push:
 wait_stopbit:
     ;wait for packet end bit    
     wait 0 pin 0 [0]                ;side 1
-    wait 0 pin 1 [14]               ;side 0  ; Wait for high signal + delay (14+1+1)*5us = 80us
+    wait 1 pin 0 [14]               ;side 0  ; Wait for high signal + delay (14+1+1)*5us = 80us
 
     jmp pin, data_begin             ;side 1  ; DCC ZERO received, more data to receive
 ;----------------------------------------------------------------------------------------------------
