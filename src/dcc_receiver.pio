@@ -119,7 +119,7 @@ wait_stopbit:
 ;
 
 % c-sdk {
-static inline void dcc_receiver_init(PIO pio, uint sm, uint dcc_pin, uint offset) {
+static inline void dcc_receiver_pio_init(PIO pio, uint sm, uint dcc_pin, uint offset) {
     pio_sm_config c = dcc_receiver_program_get_default_config(offset);
 
     //Required for debugging via side set pins

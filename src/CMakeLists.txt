@@ -14,6 +14,7 @@ target_include_directories(
 target_sources(
     dcc_receiver
     INTERFACE
+    dcc_receiver.c
 )
 
 #Required Libraries
